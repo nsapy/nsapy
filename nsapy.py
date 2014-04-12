@@ -8,6 +8,8 @@ from numba import jit,autojit
 import numpy as np
 import numpy.linalg as npl
 import scipy.linalg as spl
+import scipy.sparse as sps
+import scipy.sparse.linalg as spsl
 import matplotlib.pylab as pl
 
 VECX = np.asarray([1.,0.,0.])
@@ -98,6 +100,26 @@ class Line(Element):
         self.vecx = self.node[1].coord - self.node[0].coord
         self.length = npl.norm(self.vecx)
         self.nvecx = self.vecx/self.length
+        self.dof = self.node[0].dof+self.node[1].dof
+        self.dim = self.node[0].dim
+        self.dcosx = np.asarray([np.dot(self.nvecx,VECX[:self.dim]),np.dot(self.nvecx,VECY[:self.dim])])
+
+    def assemble_stiffness_matrix(self):
+    
+        T0 = self.dcosx
+        self.T = spl.block_diag(T0,T0)
+
+        self.K = np.dot(np.dot(self.T.T,self.Kl),self.T)
+
+        self.dof_index = np.hstack((self.node[0].dof_index
+                            ,self.node[1].dof_index))
+
+        self.rows = np.repeat(self.dof_index,self.dof)
+        self.cols = np.tile(self.dof_index,self.dof)
+        self.vals = self.K.flatten()
+        self.rows = list(self.rows)
+        self.cols = list(self.cols)
+        self.vals = list(self.vals)
 
     def get_deformation_force(self):
 
@@ -112,47 +134,15 @@ class Truss2D(Line):
         super(Truss2D, self).__init__(*arg)
         self.k = self.section.ka/self.length
         self.Kl = self.k*np.array([[1.0,-1.0],[-1.0,1.0]])
-
-        self.dcosx = np.asarray([np.dot(self.nvecx,VECX[:2]),np.dot(self.nvecx,VECY[:2])])
-        T0 = self.dcosx
-        self.T = spl.block_diag(T0,T0)
-
-        self.K = np.dot(np.dot(self.T.T,self.Kl),self.T)
-
-        self.dof_index = np.hstack((self.node[0].dof_index
-                            ,self.node[1].dof_index))
-
-    def assemble_global_matrix(self,Kg):
-
-        for i in range(4):
-            ig = self.dof_index[i]
-            for j in range(4):
-                jg = self.dof_index[j]
-                Kg[ig,jg] += self.K[i,j]
-
-class Truss3D(Line):
+        self.dim = 2
+        self.dof = 4
+        
+class Truss3D(Truss2D):
     """Truss3D"""
     def __init__(self, *arg):
         super(Truss3D, self).__init__(*arg)
-
-        self.k = self.section.ka/self.length
-        self.Kl = self.k*np.array([[1.0,-1.0],[-1.0,1.0]])
-
-        self.dcosx = np.asarray([np.dot(self.nvecx,VECX),np.dot(self.nvecx,VECY),np.dot(self.nvecx,VECZ)])
-        T0 = self.dcosx
-        self.T = spl.block_diag(T0,T0)
-        self.K = np.dot(np.dot(self.T.T,self.Kl),self.T)
-
-        self.dof_index = np.hstack((self.node[0].dof_index
-                            ,self.node[1].dof_index))
-
-    def assemble_global_matrix(self,Kg):
-
-        for i in range(6):
-            ig = self.dof_index[i]
-            for j in range(6):
-                jg = self.dof_index[j]
-                Kg[ig,jg] += self.K[i,j]
+        self.dim = 3
+        self.dof = 6
 
 class Constraint(GeometricTopology):
     """Constraint"""
@@ -186,8 +176,7 @@ class Analysis_Linear_Eigen(Analysis_Linear):
         super(Analysis_Linear_Eigen, self).__init__(domain)
 
     def execute(self):
-        self.domain.Omega_2,self.domain.mode = spl.eig(self.domain.K,self.domain.M)
-
+        self.domain.Omega_2,self.domain.mode = spsl.eig(self.domain.K,self.domain.M)
 
 class Analysis_Linear_Static(Analysis):
     """Analysis_Linear_Static"""
@@ -195,7 +184,7 @@ class Analysis_Linear_Static(Analysis):
         super(Analysis_Linear_Static, self).__init__(domain)
 
     def execute(self):
-        self.domain.U = np.linalg.solve(self.domain.K,self.domain.F)
+        self.domain.U = spsl.spsolve(self.domain.K,self.domain.F)
         
 class Domain(NsaBase):
     """Domain"""
@@ -211,6 +200,11 @@ class Domain(NsaBase):
         self.load = {}
         self.alength = 0.0
 
+        self.K_rows = []
+        self.K_cols = []
+        self.K_vals = []
+        self.M_vals = []
+
     def add_node(self,*arg):
         n = Node(*arg)
         n.dof = self.DOF
@@ -218,8 +212,10 @@ class Domain(NsaBase):
         n.index = self.nodeindex
         n.get_global_dof_index()
         n.coord = n.coord[:n.dim]
+        self.M_vals += [n.mass for i in range(n.dof)]
         self.node[n.tag] = n
         self.nodeindex += 1
+
 
     def add_mat(self,mattype,*arg):
         mat = mattype(*arg)
@@ -232,8 +228,12 @@ class Domain(NsaBase):
     def add_ele(self,eletype,*arg):
         ele = eletype(*arg)
         self.alength += ele.length
+        ele.assemble_stiffness_matrix()
+        self.K_rows += ele.rows
+        self.K_cols += ele.cols
+        self.K_vals += ele.vals
         self.ele[ele.tag] = ele
-
+        
     def add_cons(self,*arg):
         cons = Constraint(*arg)
         self.cons[cons.tag] = cons
@@ -249,8 +249,6 @@ class Domain(NsaBase):
         self.alength /= self.nele
         self.ndof = self.nnode*self.DOF
 
-        self.M = np.zeros(self.ndof)
-        self.K = np.zeros((self.ndof,self.ndof))
         self.F = np.zeros(self.ndof)
         self.U = np.zeros(self.ndof)
         self.UF = np.zeros(self.ndof)
@@ -260,10 +258,8 @@ class Domain(NsaBase):
         self.apply_cons()
 
     def assemble(self):
-        for ni in self.node.values():
-            self.M[ni.index] = ni.mass
-        for elei in self.ele.values():
-            elei.assemble_global_matrix(self.K)
+        self.K = sps.coo_matrix((self.K_vals, (self.K_rows,self.K_cols)), shape=(self.ndof,self.ndof))
+        self.M = sps.diags(self.M_vals,0)
 
     def apply_load(self):
         for loadi in self.load.values():
@@ -272,14 +268,16 @@ class Domain(NsaBase):
                 self.F[dof_index] = loadi.dof_value[i]
 
     def apply_cons(self):
+        K = self.K.toarray()
         for consi in self.cons.values():
             for i in range(len(consi.dof_tag)):
                 dof_index = consi.node.dof_index[consi.dof_tag[i]]
-                self.F = self.F-consi.dof_value[i]*self.K[:,dof_index]
-                self.K[:,dof_index] = 0.0
-                self.K[dof_index,:] = 0.0
-                self.K[dof_index,dof_index] = 1.0
+                self.F = self.F-consi.dof_value[i]*K[:,dof_index]
+                K[:,dof_index] = 0.0
+                K[dof_index,:] = 0.0
+                K[dof_index,dof_index] = 1.0
                 self.F[dof_index] = consi.dof_value[i]
+        self.K = sps.csr_matrix(K)
 
 class PostProcessor(NsaBase):
     """PostProcessor"""
@@ -337,8 +335,8 @@ def main():
     d = 1000.0
 
     for i in range(7):
-        truss.add_node(11+i,(i*d,0,0))
-        truss.add_node(21+i,(i*d,d,0))
+        truss.add_node(11+i,(i*d,0,0),1.)
+        truss.add_node(21+i,(i*d,d,0),1.)
         truss.add_ele(Truss2D,'V-%d'%(1+i),truss.sec[1],(truss.node[11+i],truss.node[21+i]))
         truss.add_load(1+i,truss.node[21+i],[2],[-1.])
 
