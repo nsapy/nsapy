@@ -7,9 +7,9 @@
 import numpy as np
 import scipy.sparse as sps
 
-VECX = np.asarray([1.,0.,0.])
-VECY = np.asarray([0.,1.,0.])
-VECZ = np.asarray([0.,0.,1.])
+VECX = np.array([1.,0.,0.])
+VECY = np.array([0.,1.,0.])
+VECZ = np.array([0.,0.,1.])
 
 class NsaBase(object):
     """NsaBase"""
@@ -36,11 +36,12 @@ class Node(GeometricTopology):
     def __init__(self, *arg):
 
         super(Node, self).__init__(*arg)
-        self.coord = np.asarray(arg[1],dtype=float)
+        self.coord = np.array(arg[1],dtype=float)
         self.mass = float(arg[2]) if len(arg)>=3 else 0.0
         self.dim = 3
         self.dof = 3
         self.index = 1
+        self.coord0 = self.coord
 
     def get_global_dof_index(self):
 
@@ -50,7 +51,11 @@ class Node(GeometricTopology):
 
     def get_deformation(self,U):
 
-        self.deformation = np.asarray([U[self.dof_index[i]] for i in range(self.dof)])
+        self.deformation = np.array([U[self.dof_index[i]] for i in range(self.dof)])
+
+    def update_coord(self):
+
+        self.coord += self.deformation
 
 
 class Section(GeometricTopology):
@@ -67,26 +72,35 @@ class Element(GeometricTopology):
         self.node = arg[2]
         self.index = 1
 
-class Constraint(GeometricTopology):
+class Constraint(NsaBase):
     """Constraint"""
     def __init__(self, *arg):
         super(Constraint, self).__init__(*arg)
         self.node = arg[1]
-        self.dof_tag = np.asarray(arg[2],dtype=int)-1
-        self.dof_value = np.asarray(arg[3],dtype=float)
+        self.dof_tag = np.array(arg[2],dtype=int)-1
+        self.dof_value = np.array(arg[3],dtype=float)
+        
         
 class Load(NsaBase):
     """Load"""
     def __init__(self, *arg):
         super(Load, self).__init__(*arg)
         self.node = arg[1]
-        self.dof_tag = np.asarray(arg[2],dtype=int)-1
-        self.dof_value = np.asarray(arg[3],dtype=float)
+        self.dof_tag = np.array(arg[2],dtype=int)-1
+        self.dof_value = np.array(arg[3],dtype=float)
+        self.time = np.array(arg[4],dtype=float)
+
+        self.nsteps = 1
+        if type(self.dof_value[0]) is np.ndarray:
+            self.nsteps = len(self.dof_value[0])
+
 
 class Analysis(NsaBase):
     """Analysis"""
     def __init__(self, domain):
         self.domain = domain
+        self.nsteps = 1
+        
         
 class Domain(NsaBase):
     """Domain"""
@@ -158,6 +172,8 @@ class Domain(NsaBase):
         self.UF = np.zeros(self.ndof)
 
         self.assemble()
+
+    def apply_load_cons(self):
         self.apply_load()
         self.apply_cons()
 
@@ -181,8 +197,36 @@ class Domain(NsaBase):
                 K[dof_index,:] = 0.0
                 K[dof_index,dof_index] = 1.0
                 self.F[dof_index] = consi.dof_value[i]
-        self.K = sps.csr_matrix(K)
+        self.K = sps.csc_matrix(K)
 
+    def read_gmsh(self, fn, *para):
+        gmshfile = open('%s.msh'%fn,'r')
+        nodeon,eleon = 0,0
+        eletype = para[0]
+        line = 'read_gmsh'
+        while line!='':
+            if line == '$Nodes': 
+                nodeon = 1
+                nnode = int(gmshfile.readline())
+            elif line == '$EndNodes': nodeon = 0
+            if line == '$Elements': 
+                eleon = 1
+                nele = int(gmshfile.readline())
+            elif line == '$EndElements': eleon = 0
+            if nodeon == 1:
+                line = gmshfile.readline().strip('\n')
+                line = line.replace(' ',',')
+                exec 'tag,x,y,z = %s'%line
+                self.add_node(tag,[x,y,z])
+            elif eleon == 1:
+                line = gmshfile.readline().strip('\n')
+                line = line.replace(' ',',')
+                exec 'tag,x,y,z = %s'%line
+                self.add_ele(tag,eletype,[x,y,z])
+            else:
+                line = gmshfile.readline().strip('\n')
+    
+    
     def export_gmsh_scr_2d(self,*fn):
 
         scrf = open('%s.geo'%fn,'w')
@@ -198,6 +242,13 @@ class Domain(NsaBase):
             print >>scrf,'Line(%d) = {%d,%d};'%((ei.index+1),n1,n2)
             i+=1
         scrf.close()
+        print 'Gmsh model file \"%s.geo\" has been exported.'%fn
+
+class SaveResults(NsaBase):
+    """SaveResults"""
+    def __init__(self):
+        super(SaveResults, self).__init__()
+        
 
 class PostProcessor(NsaBase):
     """PostProcessor"""
@@ -239,6 +290,8 @@ class PostProcessor(NsaBase):
             print >>scrf,'Line(%d) = {%d,%d};'%(i,n1,n2)
             i+=1
         scrf.close()
+        
+        print 'Gmsh model file \"%s\" has been exported.'%fn
 
 if __name__ == '__main__':
 
