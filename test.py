@@ -1,7 +1,8 @@
 # -*- coding:utf-8 -*-
 '''
-**Python Module for Nonlinear Structural Analysis
-**用于结构非线性分析的Python模块
+**Nsapy ---- Python Module for Nonlinear Structural Analysis
+
+This is a testing script.
 
 '''
 from nsapy import Domain,Analysis,PostProcessor

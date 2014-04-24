@@ -12,7 +12,7 @@ def main():
     truss = Domain(2,2)
 
     truss.add_mat(Material1D.Material_Elastic,1,2.e5)
-    truss.add_sec(Section.Section_Elastic,1,truss.mat[1],100.)
+    truss.add_sec(Section.Section_Elastic_Truss,1,truss.mat[1],100.)
 
     L = 1000.0
     
@@ -20,19 +20,20 @@ def main():
     truss.add_node(2,(L  ,0.,0.),200.)
         
     truss.add_ele(Element.Truss2D,1,truss.sec[1],(truss.node[1],truss.node[2]))
-    F = -1.e4
+    F = [-1.e4,-2.e4,-3.e4,-4.e4]
     truss.add_load(1,truss.node[2],[1],[F])
 
     truss.add_cons(1,truss.node[1],[1,2],[0.0,0.0])
     truss.add_cons(2,truss.node[2],[2],[0.0])
 
     truss.build_model()
+    truss.apply_cons()
     # truss.export_gmsh_scr_2d('truss')
 
     analyse = Analysis.Analysis_Linear_Eigen(truss)
     analyse.execute(1)
     analyse = Analysis.Analysis_Linear_Static(truss)
-    analyse.execute()
+    analyse.execute(4)
 
     post = PostProcessor(truss)
     post.get_all()

@@ -88,13 +88,9 @@ class Load(NsaBase):
         self.node = arg[1]
         self.dof_tag = np.array(arg[2],dtype=int)-1
         self.dof_value = np.array(arg[3],dtype=float)
-        self.time = np.array(arg[4],dtype=float)
-
-        self.nsteps = 1
-        if type(self.dof_value[0]) is np.ndarray:
-            self.nsteps = len(self.dof_value[0])
-
-
+        self.nsteps = len(self.dof_value[0])
+        self.time = np.array(arg[4],dtype=float) if len(arg)>5 else np.arange(1,self.nsteps)
+        
 class Analysis(NsaBase):
     """Analysis"""
     def __init__(self, domain):
@@ -173,21 +169,19 @@ class Domain(NsaBase):
 
         self.assemble()
 
-    def apply_load_cons(self):
-        self.apply_load()
-        self.apply_cons()
-
     def assemble(self):
         self.K = sps.coo_matrix((self.K_vals, (self.K_rows,self.K_cols)), shape=(self.ndof,self.ndof))
         self.M = sps.diags(self.M_vals,0)
 
-    def apply_load(self):
+    def apply_load(self,step):
+        '''施加节点荷载'''
         for loadi in self.load.values():
             for i in range(len(loadi.dof_tag)):
                 dof_index = loadi.node.dof_index[loadi.dof_tag[i]]
-                self.F[dof_index] = loadi.dof_value[i]
+                self.F[dof_index] = loadi.dof_value[i][step]-loadi.dof_value[i][step-1] if step>=1 else loadi.dof_value[i][step]
 
     def apply_cons(self):
+        '''施加支座约束'''
         K = self.K.toarray()
         for consi in self.cons.values():
             for i in range(len(consi.dof_tag)):
@@ -244,10 +238,27 @@ class Domain(NsaBase):
         scrf.close()
         print 'Gmsh model file \"%s.geo\" has been exported.'%fn
 
-class SaveResults(NsaBase):
-    """SaveResults"""
+class Results(NsaBase):
+    """Results"""
     def __init__(self):
-        super(SaveResults, self).__init__()
+        super(Results, self).__init__(*arg)
+    
+class Results_Node(Results):
+    """Results"""
+    def __init__(self,domain):
+        super(Results_Node, self).__init__(*arg)
+        self.domain = domain
+        self.node = {}
+
+    def add_node(self,tag):
+        self.node[tag] = self.domain.node[tag]
+
+    def save_result(self):
+        pass
+
+
+
+
         
 
 class PostProcessor(NsaBase):
