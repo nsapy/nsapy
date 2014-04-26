@@ -6,6 +6,7 @@
 '''
 import numpy as np
 import scipy.sparse as sps
+from copy import deepcopy
 
 VECX = np.array([1.,0.,0.])
 VECY = np.array([0.,1.,0.])
@@ -31,6 +32,13 @@ class GeometricTopology(NsaBase):
     def __init__(self, *arg):
         super(GeometricTopology,self).__init__(*arg)
     
+class RefPoint(GeometricTopology):
+    """RefPoint"""
+    def __init__(self, *arg):
+
+        super(RefPoint, self).__init__(*arg)
+        self.coord = np.array(arg[1],dtype=float)
+
 class Node(GeometricTopology):
     """Node"""
     def __init__(self, *arg):
@@ -62,13 +70,14 @@ class Section(GeometricTopology):
     """Section"""
     def __init__(self, *arg):
         super(Section, self).__init__(*arg)
+        self.mat = deepcopy(arg[1])
         
 class Element(GeometricTopology):
     """Element"""
     def __init__(self, *arg):
 
         super(Element, self).__init__(*arg)
-        self.section = arg[1]
+        self.section = deepcopy(arg[1])
         self.node = arg[2]
         self.index = 1
 
@@ -89,7 +98,7 @@ class Load(NsaBase):
         self.dof_tag = np.array(arg[2],dtype=int)-1
         self.dof_value = np.array(arg[3],dtype=float)
         self.nsteps = len(self.dof_value[0])
-        self.time = np.array(arg[4],dtype=float) if len(arg)>5 else np.arange(1,self.nsteps)
+        self.time = np.array(arg[4],dtype=float) if len(arg)>4 else np.arange(self.nsteps)
         
 class Analysis(NsaBase):
     """Analysis"""
@@ -97,12 +106,13 @@ class Analysis(NsaBase):
         self.domain = domain
         self.nsteps = 1
         
-        
 class Domain(NsaBase):
     """Domain"""
     def __init__(self,*arg):
 
         self.DIM, self.DOF = int(arg[0]),int(arg[1])
+        self.name = arg[2] if len(arg)>2 else 'domain'
+        self.refp = {}
         self.node = {}
         self.nodeindex = 0
         self.mat = {}
@@ -117,6 +127,13 @@ class Domain(NsaBase):
         self.K_cols = []
         self.K_vals = []
         self.M_vals = []
+
+        self.constraint_dof = []
+        self.load_dof = []
+        
+    def add_refpoint(self,*arg):
+        rp = RefPoint(*arg)
+        self.refp[rp.tag] = rp
 
     def add_node(self,*arg):
         n = Node(*arg)
@@ -163,11 +180,14 @@ class Domain(NsaBase):
         self.alength /= self.nele
         self.ndof = self.nnode*self.DOF
 
+        self.dof_index_list = range(self.ndof)
+
         self.F = np.zeros(self.ndof)
         self.U = np.zeros(self.ndof)
         self.UF = np.zeros(self.ndof)
 
         self.assemble()
+        self.write_gmsh()
 
     def assemble(self):
         self.K = sps.coo_matrix((self.K_vals, (self.K_rows,self.K_cols)), shape=(self.ndof,self.ndof))
@@ -178,6 +198,7 @@ class Domain(NsaBase):
         for loadi in self.load.values():
             for i in range(len(loadi.dof_tag)):
                 dof_index = loadi.node.dof_index[loadi.dof_tag[i]]
+                self.load_dof.append(dof_index)
                 self.F[dof_index] = loadi.dof_value[i][step]-loadi.dof_value[i][step-1] if step>=1 else loadi.dof_value[i][step]
 
     def apply_cons(self):
@@ -186,12 +207,39 @@ class Domain(NsaBase):
         for consi in self.cons.values():
             for i in range(len(consi.dof_tag)):
                 dof_index = consi.node.dof_index[consi.dof_tag[i]]
+                self.constraint_dof.append(dof_index)
                 self.F = self.F-consi.dof_value[i]*K[:,dof_index]
                 K[:,dof_index] = 0.0
                 K[dof_index,:] = 0.0
                 K[dof_index,dof_index] = 1.0
                 self.F[dof_index] = consi.dof_value[i]
         self.K = sps.csc_matrix(K)
+
+    def write_gmsh(self):
+        gmshfile = open('%s.msh'%self.name,'w')
+        gmsh_head = '''$MeshFormat
+2.8 0 8
+$EndMeshFormat\n'''
+        gmshfile.write(gmsh_head)
+        gmshfile.write('$Nodes\n')
+        gmshfile.write('%d\n'%self.nnode)
+        for ni in self.node.values():
+            i = ni.tag
+            coord = np.zeros(3)
+            coord[:ni.dim] = ni.coord
+            x,y,z = tuple(coord)
+            print >>gmshfile,'%d %f %f %f'%(i,x,y,z)
+        gmshfile.write('$EndNodes\n')
+        
+        gmshfile.write('$Elements\n')
+        gmshfile.write('%d\n'%self.nele)
+        for ei in self.ele.values():
+            i = ei.tag
+            n1 = ei.node[0].tag
+            n2 = ei.node[1].tag
+            print >>gmshfile,'%d 1 1 1 %d %d'%(i,n1,n2)
+        gmshfile.write('$EndElements\n')
+        gmshfile.close()
 
     def read_gmsh(self, fn, *para):
         gmshfile = open('%s.msh'%fn,'r')
@@ -221,9 +269,9 @@ class Domain(NsaBase):
                 line = gmshfile.readline().strip('\n')
     
     
-    def export_gmsh_scr_2d(self,*fn):
+    def export_gmsh_scr_2d(self):
 
-        scrf = open('%s.geo'%fn,'w')
+        scrf = open('%s.geo'%self.name,'w')
         ps = 0.02*self.alength
         for ni in self.node.values():
             x,y = ni.coord
@@ -256,9 +304,6 @@ class Results_Node(Results):
     def save_result(self):
         pass
 
-
-
-
         
 
 class PostProcessor(NsaBase):
@@ -284,25 +329,6 @@ class PostProcessor(NsaBase):
         for ei in self.domain.ele.values():
             for i in range(len(ei.dof_index)):
                 self.domain.UF[ei.dof_index[i]] += -ei.global_force[i]
-
-    def export_gmsh_scr_2d(self,*fn):
-
-        scrf = open('%s.geo'%fn,'w')
-        ps = 0.01*self.domain.alength
-        for ni in self.domain.node.values():
-            x,y = ni.coord
-            i = ni.index+1
-            print >>scrf,'Point(%d) = {%.2f,%.2f,0.0,%.2e};'%(i,x,y,ps)
-        
-        i = 1
-        for ei in self.domain.ele.values():
-            n1 = ei.node[0].index+1
-            n2 = ei.node[1].index+1
-            print >>scrf,'Line(%d) = {%d,%d};'%(i,n1,n2)
-            i+=1
-        scrf.close()
-        
-        print 'Gmsh model file \"%s\" has been exported.'%fn
 
 if __name__ == '__main__':
 

@@ -10,9 +10,9 @@ import numpy as np
 
 def main():
 
-    truss = Domain(2,2,'test01')
+    truss = Domain(2,2,'test04')
 
-    truss.add_mat(Material1D.Material_Elastic,1,2.e5)
+    truss.add_mat(Material1D.Bilinear,1,2.e5,200.,0.01)
     truss.add_sec(Section.Section_Elastic_Truss,1,truss.mat[1],100.)
 
     L = 1000.0
@@ -21,7 +21,7 @@ def main():
     truss.add_node(2,(L  ,0.,0.),200.)
         
     truss.add_ele(Element.Truss2D,1,truss.sec[1],(truss.node[1],truss.node[2]))
-    F = -4.e4*np.linspace(0.1,1,10)
+    F = -2.1e4*np.linspace(0.1,1,10)
     truss.add_load(1,truss.node[2],[1],[F])
 
     truss.add_cons(1,truss.node[1],[1,2],[0.0,0.0])
@@ -31,7 +31,7 @@ def main():
     truss.apply_cons()
     truss.write_gmsh()
 
-    analyse = Analysis.Analysis_Linear_Eigen(truss)
+    analyse = Analysis.Analysis_Eigen(truss)
     analyse.execute(1)
     analyse = Analysis.Analysis_Linear_Static(truss)
     analyse.execute(10)

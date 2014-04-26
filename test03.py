@@ -10,7 +10,7 @@ import numpy as np
 
 def main():
 
-    truss = Domain(2,2,'test01')
+    truss = Domain(3,3,'test03')
 
     truss.add_mat(Material1D.Material_Elastic,1,2.e5)
     truss.add_sec(Section.Section_Elastic_Truss,1,truss.mat[1],100.)
@@ -19,13 +19,15 @@ def main():
     
     truss.add_node(1,(0.0,0.,0.),200.)
     truss.add_node(2,(L  ,0.,0.),200.)
+    
+    truss.add_refpoint(1,(1.,1.,0.))
         
-    truss.add_ele(Element.Truss2D,1,truss.sec[1],(truss.node[1],truss.node[2]))
+    truss.add_ele(Element.Truss3D,1,truss.sec[1],(truss.node[1],truss.node[2]),truss.refp[1])
     F = -4.e4*np.linspace(0.1,1,10)
     truss.add_load(1,truss.node[2],[1],[F])
 
-    truss.add_cons(1,truss.node[1],[1,2],[0.0,0.0])
-    truss.add_cons(2,truss.node[2],[2],[0.0])
+    truss.add_cons(1,truss.node[1],[1,2,3],[0.0,0.0,0.0])
+    truss.add_cons(2,truss.node[2],[2,3],[0.0,0.0])
 
     truss.build_model()
     truss.apply_cons()
