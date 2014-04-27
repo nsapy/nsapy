@@ -65,6 +65,10 @@ class Node(GeometricTopology):
 
         self.coord += self.deformation
 
+    def get_unbalanced_force(self,UF):
+
+        self.UF = np.array([UF[self.dof_index[i]] for i in range(self.dof)])
+        self.reaction = -self.UF
 
 class Section(GeometricTopology):
     """Section"""
@@ -97,6 +101,8 @@ class Load(NsaBase):
         self.node = arg[1]
         self.dof_tag = np.array(arg[2],dtype=int)-1
         self.dof_value = np.array(arg[3],dtype=float)
+        self.dof_value_der = np.array(arg[3],dtype=float)
+        self.dof_value_der[:,1:] = np.diff(self.dof_value_der)
         self.nsteps = len(self.dof_value[0])
         self.time = np.array(arg[4],dtype=float) if len(arg)>4 else np.arange(self.nsteps)
         
@@ -167,10 +173,16 @@ class Domain(NsaBase):
         
     def add_cons(self,*arg):
         cons = Constraint(*arg)
+        for i in range(len(cons.dof_tag)):
+            dof_index = cons.node.dof_index[cons.dof_tag[i]]
+            self.constraint_dof.append(dof_index)
         self.cons[cons.tag] = cons
 
     def add_load(self,*arg):
         load = Load(*arg)
+        for i in range(len(load.dof_tag)):
+            dof_index = load.node.dof_index[load.dof_tag[i]]
+            self.load_dof.append(dof_index)
         self.load[load.tag] = load
 
     def build_model(self):
@@ -183,7 +195,9 @@ class Domain(NsaBase):
         self.dof_index_list = range(self.ndof)
 
         self.F = np.zeros(self.ndof)
+        self.dF = np.zeros(self.ndof)
         self.U = np.zeros(self.ndof)
+        self.dU = np.zeros(self.ndof)
         self.UF = np.zeros(self.ndof)
 
         self.assemble()
@@ -193,27 +207,70 @@ class Domain(NsaBase):
         self.K = sps.coo_matrix((self.K_vals, (self.K_rows,self.K_cols)), shape=(self.ndof,self.ndof))
         self.M = sps.diags(self.M_vals,0)
 
+    def reassemble_stiffness_matrix(self):
+        self.K_rows = []
+        self.K_cols = []
+        self.K_vals = []
+        
+        for ei in self.ele.values():
+            ei.update_stiffness()
+            self.K_rows += ei.rows
+            self.K_cols += ei.cols
+            self.K_vals += ei.vals
+        self.K = sps.coo_matrix((self.K_vals, (self.K_rows,self.K_cols)), shape=(self.ndof,self.ndof))
+
     def apply_load(self,step):
         '''施加节点荷载'''
         for loadi in self.load.values():
             for i in range(len(loadi.dof_tag)):
                 dof_index = loadi.node.dof_index[loadi.dof_tag[i]]
-                self.load_dof.append(dof_index)
-                self.F[dof_index] = loadi.dof_value[i][step]-loadi.dof_value[i][step-1] if step>=1 else loadi.dof_value[i][step]
+                self.F[dof_index] = loadi.dof_value[i][step]
+                self.dF[dof_index] = loadi.dof_value_der[i][step]
 
-    def apply_cons(self):
+    def apply_cons(self,step):
         '''施加支座约束'''
         K = self.K.toarray()
+        # maxK = np.amax(abs(K))
         for consi in self.cons.values():
             for i in range(len(consi.dof_tag)):
                 dof_index = consi.node.dof_index[consi.dof_tag[i]]
-                self.constraint_dof.append(dof_index)
                 self.F = self.F-consi.dof_value[i]*K[:,dof_index]
+                self.dF = self.dF-consi.dof_value[i]*K[:,dof_index]
                 K[:,dof_index] = 0.0
                 K[dof_index,:] = 0.0
                 K[dof_index,dof_index] = 1.0
                 self.F[dof_index] = consi.dof_value[i]
+                self.dF[dof_index] = consi.dof_value[i] if step==0 else 0.0
         self.K = sps.csc_matrix(K)
+
+    def get_result(self):
+        
+        for ni in self.node.values():
+            ni.get_deformation(self.U)
+            
+        for ei in self.ele.values():
+            ei.get_deformation_force()
+            self.Ft = np.zeros(self.ndof)
+            for i in range(len(ei.dof_index)):
+                self.Ft[ei.dof_index[i]] += ei.global_force[i]
+            for i in self.dof_index_list:
+                if i in self.constraint_dof:
+                    self.Ft[i] = 0.0
+
+    def update(self):
+        
+        for ni in self.node.values():
+            ni.get_deformation(self.U)
+            
+        for ei in self.ele.values():
+            ei.get_deformation_force()
+            ei.update()
+            self.UF = np.zeros(self.ndof)
+            for i in range(len(ei.dof_index)):
+                self.UF[ei.dof_index[i]] += -ei.global_force[i]
+
+        for ni in self.node.values():
+            ni.get_unbalanced_force(self.UF)
 
     def write_gmsh(self):
         gmshfile = open('%s.msh'%self.name,'w')
@@ -289,21 +346,24 @@ $EndMeshFormat\n'''
 class Results(NsaBase):
     """Results"""
     def __init__(self):
-        super(Results, self).__init__(*arg)
+        pass
     
-class Results_Node(Results):
+class NodeResult(Results):
     """Results"""
-    def __init__(self,domain):
-        super(Results_Node, self).__init__(*arg)
+    def __init__(self,domain,*tag):
+        super(NodeResult, self).__init__()
         self.domain = domain
-        self.node = {}
+        self.node = self.domain.node[tag[0]]
+        self.fieldtag = tag[1]
+        self.doftag = tag[2]-1
 
-    def add_node(self,tag):
-        self.node[tag] = self.domain.node[tag]
+        self.values = []
 
-    def save_result(self):
+    def add_node(self,tag,fieldtag):
         pass
 
+    def save_result(self):
+        exec 'self.values.append(self.node.%s[%d])'%(self.fieldtag,self.doftag)
         
 
 class PostProcessor(NsaBase):
@@ -325,7 +385,7 @@ class PostProcessor(NsaBase):
         for ei in self.domain.ele.values():
             ei.get_deformation_force()
 
-    def get_unbalancedforce(self):
+    def get_unbalanced_force(self):
         for ei in self.domain.ele.values():
             for i in range(len(ei.dof_index)):
                 self.domain.UF[ei.dof_index[i]] += -ei.global_force[i]
