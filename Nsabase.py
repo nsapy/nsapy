@@ -45,7 +45,7 @@ class Node(GeometricTopology):
 
         super(Node, self).__init__(*arg)
         self.coord = np.array(arg[1],dtype=float)
-        self.mass = float(arg[2]) if len(arg)>=3 else 0.0
+        self.mass = np.array(arg[2],dtype=float) if len(arg)>=3 else None
         self.dim = 3
         self.dof = 3
         self.index = 1
@@ -92,6 +92,7 @@ class Constraint(NsaBase):
         self.node = arg[1]
         self.dof_tag = np.array(arg[2],dtype=int)-1
         self.dof_value = np.array(arg[3],dtype=float)
+        self.dof_index = []
         
         
 class Load(NsaBase):
@@ -110,7 +111,52 @@ class Analysis(NsaBase):
     """Analysis"""
     def __init__(self, domain):
         self.domain = domain
-        self.nsteps = 1
+        self.create_data_file()
+
+    def create_data_file(self):
+        meshfile = open(self.domain.name+'.msh','r')
+        meshdata = meshfile.read()
+        meshfile.close()
+
+        self.nodedatafile = open(self.domain.name+'_nodedata.msh','w')
+        self.nodedatafile.write(meshdata)
+        
+        self.eledatafile = open(self.domain.name+'_eledata.msh','w')
+        self.eledatafile.write(meshdata)
+
+    def save_data_file(self):
+        self.nodedatafile.close()
+        self.eledatafile.close()
+
+    def write_data_file(self):
+
+        self.nodedatafile.write('$NodeData\n')
+        self.nodedatafile.write('1\n\"%s\"\n'%(self.domain.name))
+        self.nodedatafile.write('1\n%f\n'%self.ctime)
+        self.nodedatafile.write('3\n%d\n%d\n%d\n'%(0,3,self.domain.nnode))
+        for ni in self.domain.node.values():
+            u = np.zeros(3)
+            u[:ni.dof] = ni.deformation
+            u1,u2,u3 = tuple(u)
+            self.nodedatafile.write('%d %f %f %f\n'%(ni.tag,u1,u2,u3))
+
+        self.nodedatafile.write('$EndNodeData\n')
+
+        self.eledatafile.write('$ElementData\n')
+        self.eledatafile.write('1\n\"Load Step %d\"\n'%self.cstep)
+        self.eledatafile.write('1\n%f\n'%self.ctime)
+        self.eledatafile.write('3\n%d\n%d\n%d\n'%(self.cstep,3,self.domain.nele))
+
+        for ei in self.domain.ele.values():
+            f = np.zeros(3)
+            f[:ei.local_dof] = ei.local_force
+            f1,f2,f3 = tuple(f)
+            self.eledatafile.write('%d %f %f %f\n'%(ei.tag,f1,f2,f3))
+                    
+        self.eledatafile.write('$EndElementData\n')
+
+    def execute(self,nsteps):
+        pass
         
 class Domain(NsaBase):
     """Domain"""
@@ -134,8 +180,10 @@ class Domain(NsaBase):
         self.K_vals = []
         self.M_vals = []
 
-        self.constraint_dof = []
+        self.constraint_dof = {}
+        self.constraint_value = []
         self.load_dof = []
+        self.load_value = []
         
     def add_refpoint(self,*arg):
         rp = RefPoint(*arg)
@@ -148,7 +196,7 @@ class Domain(NsaBase):
         n.index = self.nodeindex
         n.get_global_dof_index()
         n.coord = n.coord[:n.dim]
-        self.M_vals += [n.mass for i in range(n.dof)]
+        self.M_vals += [n.mass[i] for i in range(n.dof)]
         self.node[n.tag] = n
         self.nodeindex += 1
 
@@ -175,7 +223,8 @@ class Domain(NsaBase):
         cons = Constraint(*arg)
         for i in range(len(cons.dof_tag)):
             dof_index = cons.node.dof_index[cons.dof_tag[i]]
-            self.constraint_dof.append(dof_index)
+            cons.dof_index.append(dof_index)
+            self.constraint_dof[dof_index] = cons.dof_value[i]
         self.cons[cons.tag] = cons
 
     def add_load(self,*arg):
@@ -193,17 +242,29 @@ class Domain(NsaBase):
         self.ndof = self.nnode*self.DOF
 
         self.dof_index_list = range(self.ndof)
+        self.free_dof = list(set(self.dof_index_list) - set(self.constraint_dof.keys()))
+        
+        self.constraint_ndof = len(self.constraint_dof)
+        self.free_ndof = self.ndof - self.constraint_ndof
 
         self.F = np.zeros(self.ndof)
         self.dF = np.zeros(self.ndof)
         self.U = np.zeros(self.ndof)
         self.dU = np.zeros(self.ndof)
         self.UF = np.zeros(self.ndof)
+        self.Ft = np.zeros(self.ndof)
+
+        # self.Reduced_F  = np.zeros(self.free_ndof)
+        # self.Reduced_dF = np.zeros(self.free_ndof)
+        # self.Reduced_U  = np.zeros(self.free_ndof)
+        # self.Reduced_dU = np.zeros(self.free_ndof)
+        # self.Reduced_UF = np.zeros(self.free_ndof)
 
         self.assemble()
         self.write_gmsh()
 
     def assemble(self):
+
         self.K = sps.coo_matrix((self.K_vals, (self.K_rows,self.K_cols)), shape=(self.ndof,self.ndof))
         self.M = sps.diags(self.M_vals,0)
 
@@ -217,6 +278,7 @@ class Domain(NsaBase):
             self.K_rows += ei.rows
             self.K_cols += ei.cols
             self.K_vals += ei.vals
+
         self.K = sps.coo_matrix((self.K_vals, (self.K_rows,self.K_cols)), shape=(self.ndof,self.ndof))
 
     def apply_load(self,step):
@@ -230,42 +292,68 @@ class Domain(NsaBase):
     def apply_cons(self,step):
         '''施加支座约束'''
         K = self.K.toarray()
-        # maxK = np.amax(abs(K))
-        for consi in self.cons.values():
-            for i in range(len(consi.dof_tag)):
-                dof_index = consi.node.dof_index[consi.dof_tag[i]]
-                self.F = self.F-consi.dof_value[i]*K[:,dof_index]
-                self.dF = self.dF-consi.dof_value[i]*K[:,dof_index]
-                K[:,dof_index] = 0.0
-                K[dof_index,:] = 0.0
-                K[dof_index,dof_index] = 1.0
-                self.F[dof_index] = consi.dof_value[i]
-                self.dF[dof_index] = consi.dof_value[i] if step==0 else 0.0
+        # RK = deepcopy(K)
+
+        for dof_index in self.constraint_dof.keys():
+            dof_value = self.constraint_dof[dof_index]
+            self.F = self.F-dof_value*K[:,dof_index]
+            if step==0:
+                self.dF = self.dF-dof_value*K[:,dof_index]
+
+            K[:,dof_index] = 0.0
+            K[dof_index,:] = 0.0
+            K[dof_index,dof_index] = 1.0
+
         self.K = sps.csc_matrix(K)
+    
+        # constraint_dof = self.constraint_dof.keys()
+        # self.Reduced_F = np.delete(self.F,constraint_dof)
+        # self.Reduced_dF = np.delete(self.dF,constraint_dof)
+        # self.K = sps.csc_matrix(K)
+        # self.M = sps.csc_matrix(M)
+        # RK = np.delete(RK,constraint_dof,0)
+        # RK = np.delete(RK,constraint_dof,1)
+        # RM = np.delete(RM,constraint_dof,0)
+        # RM = np.delete(RM,constraint_dof,1)
+        # self.Reduced_K = sps.csc_matrix(RK)
+        # self.Reduced_M = sps.csc_matrix(RM)
+
+        # self.K = self.Reduced_K
+        # self.M = self.Reduced_M
+        # self.F = self.Reduced_F
+        # self.dF = self.Reduced_dF
 
     def get_result(self):
-        
+
         for ni in self.node.values():
             ni.get_deformation(self.U)
-            
+        
+        self.Ft = np.zeros(self.ndof)
         for ei in self.ele.values():
-            ei.get_deformation_force()
-            self.Ft = np.zeros(self.ndof)
+            ei.get_deformation_force() 
             for i in range(len(ei.dof_index)):
                 self.Ft[ei.dof_index[i]] += ei.global_force[i]
-            for i in self.dof_index_list:
-                if i in self.constraint_dof:
-                    self.Ft[i] = 0.0
+        self.UF = -self.Ft
+        for i in self.constraint_dof.keys():
+            self.Ft[i] = 0.0
+
+        for ni in self.node.values():
+            ni.get_unbalanced_force(self.UF)
 
     def update(self):
         
+        # 将约束自由度的位移值插入缩减的自由度
+        # for i in self.constraint_dof.keys():
+        #     self.U[i] = self.constraint_dof[i]
+        # for i in range(self.free_ndof):
+        #     self.U[self.free_dof[i]] = self.Reduced_U[i]
+
         for ni in self.node.values():
-            ni.get_deformation(self.U)
-            
+            ni.get_deformation(self.U)  
+        self.UF = np.zeros(self.ndof)
         for ei in self.ele.values():
             ei.get_deformation_force()
-            ei.update()
-            self.UF = np.zeros(self.ndof)
+            ei.update()   
             for i in range(len(ei.dof_index)):
                 self.UF[ei.dof_index[i]] += -ei.global_force[i]
 
