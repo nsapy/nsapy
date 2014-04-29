@@ -83,7 +83,6 @@ class Element(GeometricTopology):
         super(Element, self).__init__(*arg)
         self.section = deepcopy(arg[1])
         self.node = arg[2]
-        self.index = 1
 
 class Constraint(NsaBase):
     """Constraint"""
@@ -136,7 +135,11 @@ class Analysis(NsaBase):
         self.nodedatafile.write('3\n%d\n%d\n%d\n'%(0,3,self.domain.nnode))
         for ni in self.domain.node.values():
             u = np.zeros(3)
-            u[:ni.dof] = ni.deformation
+            if ni.dof in [2,3]:
+                dof = 2
+            elif ni.dof in [4,6]:
+                dof = 3
+            u[:dof] = ni.deformation[:dof]
             u1,u2,u3 = tuple(u)
             self.nodedatafile.write('%d %f %f %f\n'%(ni.tag,u1,u2,u3))
 
@@ -292,7 +295,6 @@ class Domain(NsaBase):
     def apply_cons(self,step):
         '''施加支座约束'''
         K = self.K.toarray()
-        # RK = deepcopy(K)
 
         for dof_index in self.constraint_dof.keys():
             dof_value = self.constraint_dof[dof_index]
@@ -305,35 +307,24 @@ class Domain(NsaBase):
             K[dof_index,dof_index] = 1.0
 
         self.K = sps.csc_matrix(K)
-    
-        # constraint_dof = self.constraint_dof.keys()
-        # self.Reduced_F = np.delete(self.F,constraint_dof)
-        # self.Reduced_dF = np.delete(self.dF,constraint_dof)
-        # self.K = sps.csc_matrix(K)
-        # self.M = sps.csc_matrix(M)
-        # RK = np.delete(RK,constraint_dof,0)
-        # RK = np.delete(RK,constraint_dof,1)
-        # RM = np.delete(RM,constraint_dof,0)
-        # RM = np.delete(RM,constraint_dof,1)
-        # self.Reduced_K = sps.csc_matrix(RK)
-        # self.Reduced_M = sps.csc_matrix(RM)
-
-        # self.K = self.Reduced_K
-        # self.M = self.Reduced_M
-        # self.F = self.Reduced_F
-        # self.dF = self.Reduced_dF
 
     def get_result(self):
+
+        '''为计算节点反力向量'''
 
         for ni in self.node.values():
             ni.get_deformation(self.U)
         
         self.Ft = np.zeros(self.ndof)
+
         for ei in self.ele.values():
-            ei.get_deformation_force() 
+            ei.get_deformation_force()
             for i in range(len(ei.dof_index)):
                 self.Ft[ei.dof_index[i]] += ei.global_force[i]
+        
         self.UF = -self.Ft
+
+        # 约束自由度反力置零
         for i in self.constraint_dof.keys():
             self.Ft[i] = 0.0
 
@@ -342,20 +333,29 @@ class Domain(NsaBase):
 
     def update(self):
         
-        # 将约束自由度的位移值插入缩减的自由度
-        # for i in self.constraint_dof.keys():
-        #     self.U[i] = self.constraint_dof[i]
-        # for i in range(self.free_ndof):
-        #     self.U[self.free_dof[i]] = self.Reduced_U[i]
-
         for ni in self.node.values():
-            ni.get_deformation(self.U)  
+            ni.get_deformation(self.U)
+
+        self.K_rows = []
+        self.K_cols = []
+        self.K_vals = []
         self.UF = np.zeros(self.ndof)
+        
         for ei in self.ele.values():
             ei.get_deformation_force()
-            ei.update()   
+            # 更新应力状态
+            ei.update()
+            # 更新单元刚度矩阵
+            ei.update_stiffness()
+            self.K_rows += ei.rows
+            self.K_cols += ei.cols
+            self.K_vals += ei.vals
+            # 更新节点不平衡力        
             for i in range(len(ei.dof_index)):
                 self.UF[ei.dof_index[i]] += -ei.global_force[i]
+
+        # 更新整体刚度矩阵
+        self.K = sps.coo_matrix((self.K_vals, (self.K_rows,self.K_cols)), shape=(self.ndof,self.ndof))
 
         for ni in self.node.values():
             ni.get_unbalanced_force(self.UF)
@@ -449,6 +449,12 @@ class NodeResult(Results):
 
     def add_node(self,tag,fieldtag):
         pass
+
+    def __add__(self,other):
+        self.values = np.array(self.values)
+        other.values = np.array(other.values)
+        self.values += other.values
+        return self
 
     def save_result(self):
         exec 'self.values.append(self.node.%s[%d])'%(self.fieldtag,self.doftag)
