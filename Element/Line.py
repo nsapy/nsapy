@@ -9,58 +9,248 @@ import numpy as np
 import scipy.sparse as sps
 import scipy.linalg as spl
 
-from nsapy.Nsabase import Element
+from nsapy.Nsabase import Element,RefPoint
 from nsapy.Nsabase import VECX,VECY,VECZ
+
+from copy import deepcopy
+
+def dcos(vec):
+    '''计算向量的方向余弦'''
+
+    dim = len(vec)
+    res = np.zeros(dim)
+    res[0] = vec.dot(VECX[:dim])
+    res[1] = vec.dot(VECY[:dim])
+    if dim>2:
+        res[2] = vec.dot(VECZ[:dim])
+    return res
 
 class Line(Element):
     """Line"""
     def __init__(self, *arg):
 
+        # 初始化单元
         super(Line, self).__init__(*arg)
-        self.vecx = self.node[1].coord - self.node[0].coord
-        self.length = np.linalg.norm(self.vecx)
-        self.nvecx = self.vecx/self.length
-        self.dof = self.node[0].dof+self.node[1].dof
-        self.dim = self.node[0].dim
-        self.dcosx = np.asarray([np.dot(self.nvecx,VECX[:self.dim]),np.dot(self.nvecx,VECY[:self.dim])])
+        self.vecx = self.node[1].coord - self.node[0].coord # 单元局部x轴向量
+        self.length = np.linalg.norm(self.vecx) # 单元长度
+        self.nvecx = self.vecx/self.length # 单元局部x轴单位向量
+        self.dof = self.node[0].dof+self.node[1].dof # 单元节点自由度总数
+        self.dim = self.node[0].dim # 单元维度
+        self.local_dof = 1 # 单元局部自由度
+        # 局部x轴的方向余弦
+        self.dcosx = dcos(self.nvecx)
+        
+    def get_trans_matrix(self):
+        '''几何转换矩阵'''
+        pass
+
+    def get_stiffness_matrix(self):
+        self.K = self.T.T.dot(self.Ke).dot(self.T)
 
     def assemble_stiffness_matrix(self):
-    
-        T0 = self.dcosx
-        self.T = spl.block_diag(T0,T0)
-
-        self.K = np.dot(np.dot(self.T.T,self.Kl),self.T)
-
+        
+        '''将单元刚度矩阵定位到全局刚度矩阵'''
+        # 读取节点自由度的全局编号
         self.dof_index = np.hstack((self.node[0].dof_index
                             ,self.node[1].dof_index))
 
-        self.rows = np.repeat(self.dof_index,self.dof)
-        self.cols = np.tile(self.dof_index,self.dof)
-        self.vals = self.K.flatten()
+        #　将局部刚度矩阵按行重新排列成一维向量
+        self.vals = self.K.flatten() # 向量化的刚度矩阵
+        self.rows = np.repeat(self.dof_index,self.dof) # 刚度元素在全局矩阵中的行号
+        self.cols = np.tile(self.dof_index,self.dof) # 刚度元素在全局矩阵中的列号
+        
+        # 将上述向量转化为list对象以便于组合操作
         self.rows = list(self.rows)
         self.cols = list(self.cols)
         self.vals = list(self.vals)
 
     def get_deformation_force(self):
+        ''' 获取节点变形及单元内力 '''
+        self.get_deformation()
+        self.get_force()
 
+    def get_deformation(self):
+        ''' 获取节点变形及应变 '''
         self.global_deformation = np.array([self.node[0].deformation,self.node[1].deformation]).flatten().T
-        self.global_force = np.dot(self.K,self.global_deformation)
-        self.local_deformation = np.dot(self.T,self.global_deformation)
-        self.local_force = np.dot(self.Kl,self.local_deformation)
+        self.local_deformation = self.T.dot(self.global_deformation)
+        self.strain = self.local_deformation/self.length
+
+    def get_force(self):
+        ''' 获取单元内力 '''
+        self.section.get_force_stiffness(self.strain)
+        self.local_force = self.section.inner_force
+        self.global_force = self.T.T.dot(self.local_force).flatten()
         
+    def update_stiffness(self):
+
+        self.get_stiffness()
+        self.get_stiffness_matrix()
+        self.assemble_stiffness_matrix()
+
+    def update(self):
+        '''非线性迭代收敛时将状态变量更新'''
+        self.section.update()
         
+            
 class Truss2D(Line):
     """Truss2D"""
     def __init__(self, *arg):
         super(Truss2D, self).__init__(*arg)
-        self.k = self.section.ka/self.length
-        self.Kl = self.k*np.array([[1.0,-1.0],[-1.0,1.0]])
+        
         self.dim = 2
         self.dof = 4
+        self.get_stiffness()
+        self.get_trans_matrix()
+        self.get_stiffness_matrix()
         
-class Truss3D(Truss2D):
+    def get_stiffness(self):
+        self.Ke = np.array([[self.section.Da/self.length]])
+        
+    def get_trans_matrix(self):
+        '''几何转换矩阵'''
+        self.nvecx = self.nvecx[:self.dim]
+        self.dcosx = self.dcosx[:self.dim]
+        
+        self.nvecy = np.array([-self.nvecx[1],self.nvecx[0]])
+        self.dcosy = dcos(self.nvecy)
+        self.dcos = np.vstack((self.dcosx,self.dcosy))
+
+        self.T0 = np.array([[1.],[0.]]).T
+        self.T1 = np.array([[-1.,0.,1.,0.],[0.,-1.,0.,1.]])
+        self.T2 = spl.block_diag(self.dcos,self.dcos)
+        self.T = self.T0.dot(self.T1).dot(self.T2)
+        
+class Truss3D(Line):
     """Truss3D"""
     def __init__(self, *arg):
         super(Truss3D, self).__init__(*arg)
+
         self.dim = 3
         self.dof = 6
+        
+        self.ref_point = arg[3] if len(arg)>3 else None    
+        
+        self.get_stiffness()
+        self.get_trans_matrix()
+        self.get_stiffness_matrix()
+
+
+    def get_stiffness(self):
+        self.Ke = np.array([[self.section.Da/self.length]])
+
+    def get_stiffness_matrix(self):
+        self.K = self.T.T.dot(self.Ke).dot(self.T)
+        
+    def get_trans_matrix(self):
+        '''几何转换矩阵'''
+        
+        vecr = self.ref_point.coord - self.node[0].coord if self.ref_point is not None else VECY
+        vecz = np.cross(self.nvecx,vecr)
+        self.nvecz = vecz/np.linalg.norm(vecz)
+        vecy = np.cross(self.nvecz,self.nvecx)
+        self.nvecy = vecy/np.linalg.norm(vecy)
+        
+        self.dcosy = dcos(self.nvecy)
+        self.dcosz = dcos(self.nvecz)
+        self.dcos = np.vstack((self.dcosx,self.dcosy,self.dcosz))
+
+        self.T0 = np.array([[1.],[0.],[0.]]).T
+        self.T1 = np.array([[-1.,0.,0.,1.,0.,0.],[0.,-1.,0.,0.,1.,0.],[0.,0.,-1.,0.,0.,1.]])
+        self.T2 = spl.block_diag(self.dcos,self.dcos)
+        self.T = self.T0.dot(self.T1).dot(self.T2)
+
+class Frame2D(Line):
+    """Frame2D"""
+    def __init__(self, *arg):
+        super(Frame2D, self).__init__(*arg)
+        self.dim = 2
+        self.dof = 6
+
+        self.local_dof = 3 # 单元局部自由度
+        self.strain = np.zeros(self.local_dof)
+
+        self.get_stiffness()
+        self.get_trans_matrix()
+        self.get_stiffness_matrix()
+        
+    def get_stiffness(self):
+
+        Kea = [self.section.Da]
+        Keb = self.section.Db/self.length*np.array([[4.,2.],[2.,4.]])
+        self.Ke = spl.block_diag(Kea,Keb)
+        
+    def get_trans_matrix(self):
+        '''几何转换矩阵'''
+        self.nvecx = self.nvecx[:self.dim]
+        self.dcosx = self.dcosx[:self.dim]
+        
+        self.nvecy = np.array([-self.nvecx[1],self.nvecx[0]])
+        self.dcosy = dcos(self.nvecy)
+        self.dcos = np.vstack((self.dcosx,self.dcosy))  
+
+        oL = 1./self.length
+        self.T0 = np.array([
+                            [1.0,0.0,0.0,0.0],
+                            [0.0,-oL,1.0,0.0],
+                            [0.0,-oL,0.0,1.0],
+                           ])
+        self.T1 = np.array([
+                            [-1.0,0.0,0.0,1.0,0.0,0.0],
+                            [0.0,-1.0,0.0,0.0,1.0,0.0],
+                            [ 0.0,0.0,1.0,0.0,0.0,0.0],
+                            [ 0.0,0.0,0.0,0.0,0.0,1.0],
+                           ])
+        self.T2 = spl.block_diag(self.dcos,[1.0],self.dcos,[1.0])
+        self.T = self.T0.dot(self.T1).dot(self.T2)
+
+    def get_deformation(self):
+        ''' 获取节点变形及应变 '''
+        self.global_deformation = np.array([self.node[0].deformation,self.node[1].deformation]).flatten().T
+        self.local_deformation = self.T.dot(self.global_deformation)
+        self.strain[0] = self.local_deformation[0]/self.length
+        self.strain[1] = self.local_deformation[1]*-4./self.length + self.local_deformation[2]*-2./self.length
+        self.strain[2] = self.local_deformation[1]*2./self.length + self.local_deformation[2]*4./self.length
+        
+class Spring2D(Truss2D):
+    """docstring for Spring2D"""
+    def __init__(self, *arg):
+        self.node = arg[1]
+        self.mat1 = deepcopy(arg[2])
+        self.mat2 = deepcopy(arg[3])
+
+    def get_trans_matrix(self):
+        '''几何转换矩阵'''
+        self.nvecx = self.nvecx[:self.dim]
+        self.dcosx = self.dcosx[:self.dim]
+        
+        self.nvecy = np.array([-self.nvecx[1],self.nvecx[0]])
+        self.dcosy = dcos(self.nvecy)
+        self.dcos = np.vstack((self.dcosx,self.dcosy))
+
+        self.T0 = np.diag([1.,1.])
+        self.T1 = np.array([[-1.,0.,1.,0.],[0.,-1.,0.,1.]])
+        self.T2 = spl.block_diag(self.dcos,self.dcos)
+        self.T = self.T0.dot(self.T1).dot(self.T2)
+
+    def get_stiffness(self):
+        self.Ke = np.diag([self.mat1.tangent,self.mat2.tangent])
+
+    def get_deformation(self):
+        ''' 获取节点变形 '''
+        self.global_deformation = np.array([self.node[0].deformation,self.node[1].deformation]).flatten().T
+        self.local_deformation = self.T.dot(self.global_deformation)
+
+    def get_force(self):
+        ''' 获取单元内力 '''
+        self.mat1.set_strain(self.local_deformation[0])
+        self.mat1.get_stress_tangent()
+        self.mat2.set_strain(self.local_deformation[1])
+        self.mat2.get_stress_tangent()
+        self.inner_force = np.array([[self.mat1.stress,self.mat2.stress]])
+
+        self.local_force = self.section.inner_force
+        self.global_force = self.T.T.dot(self.local_force.T).flatten()
+
+    def update(self):
+        self.mat1.update_history_para()
+        self.mat2.update_history_para()

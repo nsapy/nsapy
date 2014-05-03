@@ -16,18 +16,32 @@ class Analysis_Linear(Analysis):
     def __init__(self, domain):
         super(Analysis_Linear, self).__init__(domain)
 
-class Analysis_Linear_Eigen(Analysis_Linear):
+class Analysis_Eigen(Analysis):
     """Analysis_Linear"""
     def __init__(self, domain):
-        super(Analysis_Linear_Eigen, self).__init__(domain)
+        # super(Analysis_Eigen, self).__init__(domain)
+        self.domain = domain
 
-    def execute(self):
-        self.domain.Omega_2,self.domain.mode = spsl.eig(self.domain.K,self.domain.M)
+    def execute(self, k):
+        Omega_2,self.domain.mode = spsl.eigsh(self.domain.K.tocsc(),k,self.domain.M.tocsc())
+        self.domain.Omega = np.sqrt(Omega_2)
+        self.domain.T = 2.*np.pi/self.domain.Omega
 
-class Analysis_Linear_Static(Analysis):
+class Analysis_Linear_Static(Analysis_Linear):
     """Analysis_Linear_Static"""
     def __init__(self, domain):
         super(Analysis_Linear_Static, self).__init__(domain)
 
-    def execute(self):
-        self.domain.U = spsl.spsolve(self.domain.K,self.domain.F)
+    def execute(self,nsteps):
+        for i in range(nsteps):
+            self.cstep = i
+            self.ctime = self.domain.load.values()[0].time[i]
+            self.domain.apply_load(i)
+            self.domain.apply_cons(i)
+            self.domain.U = spsl.spsolve(self.domain.K,self.domain.F)
+            self.domain.get_result()
+
+            print 'Current Time is %s.'%self.ctime
+            self.write_data_file()
+
+        self.save_data_file()
