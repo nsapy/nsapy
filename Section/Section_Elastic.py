@@ -28,13 +28,16 @@ class Section_Elastic(Section):
 
         self.inner_force = np.zeros(5)
 
+    def set_strain(self,strain):
+        self.strain = strain
+
 class Elastic_Truss(Section_Elastic):
     """Section_Elastic"""
     def __init__(self, *arg):
         super(Elastic_Truss, self).__init__(*arg)
 
-    def get_force_stiffness(self,strain):
-        self.inner_force = strain*self.Da
+    def get_force_stiffness(self):
+        self.inner_force = self.strain*self.Da
 
 class Elastic_Frame2D(Section_Elastic):
     """Section_Elastic"""
@@ -44,9 +47,9 @@ class Elastic_Frame2D(Section_Elastic):
         self.Db = self.E*self.I
         self.D = np.array([self.Da,self.Db,self.Db])
 
-    def get_force_stiffness(self,strain):
+    def get_force_stiffness(self):
 
-        self.inner_force = strain*self.D
+        self.inner_force = self.strain*self.D
 
 
 

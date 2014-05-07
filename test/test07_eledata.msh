@@ -1,0 +1,122 @@
+$MeshFormat
+2.8 0 8
+$EndMeshFormat
+$Nodes
+2
+1 0.000000 0.000000 0.000000
+2 3000.000000 0.000000 0.000000
+$EndNodes
+$Elements
+1
+1 1 1 1 1 2
+$EndElements
+$ElementData
+1
+"Load Step 0"
+1
+0.100000
+3
+0
+3
+1
+1 -0.000497 209999999.999503 -0.000497
+$EndElementData
+$ElementData
+1
+"Load Step 1"
+1
+0.200000
+3
+1
+3
+1
+1 -0.000994 419999999.999006 -0.000994
+$EndElementData
+$ElementData
+1
+"Load Step 2"
+1
+0.300000
+3
+2
+3
+1
+1 -0.001491 629999999.998509 -0.001492
+$EndElementData
+$ElementData
+1
+"Load Step 3"
+1
+0.400000
+3
+3
+3
+1
+1 -0.001989 839999999.998011 -0.001989
+$EndElementData
+$ElementData
+1
+"Load Step 4"
+1
+0.500000
+3
+4
+3
+1
+1 -0.002486 1049999999.997514 -0.002486
+$EndElementData
+$ElementData
+1
+"Load Step 5"
+1
+0.600000
+3
+5
+3
+1
+1 -0.000020 1259999999.999980 -0.000020
+$EndElementData
+$ElementData
+1
+"Load Step 6"
+1
+0.700000
+3
+6
+3
+1
+1 -0.000004 1469999999.999996 -0.000004
+$EndElementData
+$ElementData
+1
+"Load Step 7"
+1
+0.800000
+3
+7
+3
+1
+1 0.000000 1680000000.000000 0.000000
+$EndElementData
+$ElementData
+1
+"Load Step 8"
+1
+0.900000
+3
+8
+3
+1
+1 0.002570 1890000000.002570 0.002570
+$EndElementData
+$ElementData
+1
+"Load Step 9"
+1
+1.000000
+3
+9
+3
+1
+1 0.000457 2100000000.000458 0.000457
+$EndElementData

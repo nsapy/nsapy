@@ -52,7 +52,7 @@ class Bilinear(Material_Inelastic):
     def __init__(self, *arg):
         super(Bilinear, self).__init__(*arg)
         self.fy = float(arg[2]) # 屈服应力
-        self.alpha = float(arg[3]) # 屈服后刚度比
+        self.alpha = float(arg[3]) if len(arg)>3 else 0.02# 屈服后刚度比
         self.Ep = self.E0*self.alpha # 屈服后刚度
         self.sy = self.fy/self.E0 # 屈服应变
 

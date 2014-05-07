@@ -16,7 +16,7 @@ def main():
     truss.add_sec(Section.Elastic_Truss,1,truss.mat[1],100.)
 
     L = 1000.0
-    mass = [200.,200.,0.]
+    mass = [200.,200.,200.]
     truss.add_node(1,(0.0,0.,0.),mass)
     truss.add_node(2,(L  ,0.,0.),mass)
     
@@ -32,7 +32,7 @@ def main():
     truss.build_model()
     truss.apply_cons(0)
 
-    analyse = Analysis.Analysis_Linear_Eigen(truss)
+    analyse = Analysis.Analysis_Eigen(truss)
     analyse.execute(1)
     analyse = Analysis.Analysis_Linear_Static(truss)
     analyse.execute(10)

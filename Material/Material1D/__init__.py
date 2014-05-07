@@ -6,3 +6,5 @@ from __future__ import division, print_function, absolute_import
 
 from .Material_Elastic import Material_Elastic
 from .Material_Inelastic import Bilinear
+from .osmat import PyConcrete01, PyConcrete02, PySteel01, PySteel02
+

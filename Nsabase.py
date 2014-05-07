@@ -256,13 +256,7 @@ class Domain(NsaBase):
         self.dU = np.zeros(self.ndof)
         self.UF = np.zeros(self.ndof)
         self.Ft = np.zeros(self.ndof)
-
-        # self.Reduced_F  = np.zeros(self.free_ndof)
-        # self.Reduced_dF = np.zeros(self.free_ndof)
-        # self.Reduced_U  = np.zeros(self.free_ndof)
-        # self.Reduced_dU = np.zeros(self.free_ndof)
-        # self.Reduced_UF = np.zeros(self.free_ndof)
-
+        
         self.assemble()
         self.write_gmsh()
 
@@ -332,7 +326,7 @@ class Domain(NsaBase):
             ni.get_unbalanced_force(self.UF)
 
     def update(self):
-        
+        '''重新计算内力，更新历史变量'''
         for ni in self.node.values():
             ni.get_deformation(self.U)
 
@@ -343,10 +337,10 @@ class Domain(NsaBase):
         
         for ei in self.ele.values():
             ei.get_deformation_force()
-            # 更新应力状态
-            ei.update()
-            # 更新单元刚度矩阵
             ei.update_stiffness()
+            # 更新应力状态
+            ei.update_history_para()
+            # 更新单元刚度矩阵
             self.K_rows += ei.rows
             self.K_cols += ei.cols
             self.K_vals += ei.vals

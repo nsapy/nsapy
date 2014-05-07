@@ -26,15 +26,15 @@ def main():
     frame.add_node(1,(0.0,0.,0.),nmass)
     frame.add_node(2,(L  ,0.,0.),nmass)
 
-    frame.add_ele(Element.Frame2D,1,frame.sec[1],(frame.node[1],frame.node[2]))
+    frame.add_ele(Element.Frame2D_Elastic,1,frame.sec[1],(frame.node[1],frame.node[2]))
 
-    t = np.ones(1)
+    t = np.linspace(0.1,1,10)
     F1 = -10.e3*t
     
     # F1 = -8.e3*np.sin(2.*np.pi/4.*t)
     # F2 = -6.e3*np.sin(2.*np.pi/4.*t)
 
-    frame.add_load(1,frame.node[2],[2],[F1],t-1)
+    frame.add_load(1,frame.node[2],[2],[F1],t-.1)
     frame.add_cons(1,frame.node[1],[1,2,3],[0.0,0.0,0.0])
 
     frame.build_model()
@@ -51,7 +51,7 @@ def main():
     
     print '            Disp          Moment'
     print 'nsapy    %.6f    %.6f'%(frame.U[-2], -frame.UF[2])
-    print 'Theory   %.6f    %.6f'%( u[0], F1*L)
+    print 'Theory   %.6f    %.6f'%( u[-1], F1[-1]*L)
     
     return frame
 

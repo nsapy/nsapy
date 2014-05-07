@@ -8,6 +8,7 @@
 import numpy as np
 import scipy.sparse as sps
 import scipy.linalg as spl
+from scipy.special import p_roots
 
 from nsapy.Nsabase import Element,RefPoint
 from nsapy.Nsabase import VECX,VECY,VECZ
@@ -39,6 +40,7 @@ class Line(Element):
         self.local_dof = 1 # 单元局部自由度
         # 局部x轴的方向余弦
         self.dcosx = dcos(self.nvecx)
+        self.local_force = np.zeros(self.local_dof)
         
     def get_trans_matrix(self):
         '''几何转换矩阵'''
@@ -77,7 +79,8 @@ class Line(Element):
 
     def get_force(self):
         ''' 获取单元内力 '''
-        self.section.get_force_stiffness(self.strain)
+        self.section.set_strain(self.strain)
+        self.section.get_force_stiffness()
         self.local_force = self.section.inner_force
         self.global_force = self.T.T.dot(self.local_force).flatten()
         
@@ -87,9 +90,9 @@ class Line(Element):
         self.get_stiffness_matrix()
         self.assemble_stiffness_matrix()
 
-    def update(self):
+    def update_history_para(self):
         '''非线性迭代收敛时将状态变量更新'''
-        self.section.update()
+        self.section.update_history_para()
         
             
 class Truss2D(Line):
@@ -134,7 +137,6 @@ class Truss3D(Line):
         self.get_trans_matrix()
         self.get_stiffness_matrix()
 
-
     def get_stiffness(self):
         self.Ke = np.array([[self.section.Da/self.length]])
 
@@ -159,10 +161,10 @@ class Truss3D(Line):
         self.T2 = spl.block_diag(self.dcos,self.dcos)
         self.T = self.T0.dot(self.T1).dot(self.T2)
 
-class Frame2D(Line):
+class Frame2D_Elastic(Line):
     """Frame2D"""
     def __init__(self, *arg):
-        super(Frame2D, self).__init__(*arg)
+        super(Frame2D_Elastic, self).__init__(*arg)
         self.dim = 2
         self.dof = 6
 
@@ -210,7 +212,120 @@ class Frame2D(Line):
         self.strain[0] = self.local_deformation[0]/self.length
         self.strain[1] = self.local_deformation[1]*-4./self.length + self.local_deformation[2]*-2./self.length
         self.strain[2] = self.local_deformation[1]*2./self.length + self.local_deformation[2]*4./self.length
+
+class Frame2D(Line):
+    """Nonlinear Frame2D"""
+    def __init__(self, *arg):
+        super(Frame2D, self).__init__(*arg)
+        self.n_intps = arg[3] if len(arg)>3 else 5
+        self.dim = 2
+        self.dof = 6
+
+        self.local_dof = 3 # 单元局部自由度
+        self.strain = np.zeros(self.local_dof)
+
+        # 计算积分点位置及权系数
+        xi,w = p_roots(self.n_intps)
+        xi = xi.real
+        self.loc_intps,self.wf_intps = 0.5*(xi+1.0),0.5*w
         
+        # 积分点的局部坐标
+        self.x = self.length*self.loc_intps
+        # 积分点截面序列
+        self.intps = []
+        # 积分点截面应变-位移转换矩阵序列
+        self.Bx = []
+        # 积分点截面轴向应变序列
+        self.epslnx = np.zeros(self.n_intps)
+        # 积分点截面曲率序列
+        self.kappax = np.zeros(self.n_intps)
+        # 遍历所有积分点
+        for i in xrange(self.n_intps):
+            self.intps.append(deepcopy(self.section))
+            xi = self.loc_intps[i]
+            self.Bx.append(spl.block_diag([1.],[6.*xi-4.,6.*xi-2]))
+        
+        # 计算单元刚度
+        self.get_stiffness()
+        self.get_trans_matrix()
+        self.get_stiffness_matrix()
+             
+    def get_stiffness(self):
+
+        self.Ke = np.ones((3,3))
+        # 采用高斯勒让德积分计算单元刚度
+        ooL = 1./self.length
+        for i in xrange(self.n_intps):
+            B = self.Bx[i]
+            D = self.intps[i].D
+            self.Ke += ooL*self.wf_intps[i]*(B.T.dot(D).dot(B))
+        
+        # Kea[0,0] = ooL*self.wf_intps.dot(self.Dax)
+        # Keb[0,0] = ooL*self.wf_intps.dot(self.Dbx*(6.*self.loc_intps-4.)**2)
+        # Keb[1,1] = ooL*self.wf_intps.dot(self.Dbx*(6.*self.loc_intps-2.)**2)
+        # Keb[0,1] = ooL*self.wf_intps.dot(self.Dbx*(6.*self.loc_intps-4.)*(6.*self.loc_intps-2.))
+        # Keb[1,0] = Keb[0,1]*1.0
+
+        # self.Ke = spl.block_diag(Kea,Keb)
+
+    def get_trans_matrix(self):
+        '''几何转换矩阵'''
+        self.nvecx = self.nvecx[:self.dim]
+        self.dcosx = self.dcosx[:self.dim]
+        
+        self.nvecy = np.array([-self.nvecx[1],self.nvecx[0]])
+        self.dcosy = dcos(self.nvecy)
+        self.dcos = np.vstack((self.dcosx,self.dcosy))  
+
+        oL = 1./self.length
+        self.T0 = np.array([
+                            [1.0,0.0,0.0,0.0],
+                            [0.0,-oL,1.0,0.0],
+                            [0.0,-oL,0.0,1.0],
+                           ])
+        self.T1 = np.array([
+                            [-1.0,0.0,0.0,1.0,0.0,0.0],
+                            [0.0,-1.0,0.0,0.0,1.0,0.0],
+                            [ 0.0,0.0,1.0,0.0,0.0,0.0],
+                            [ 0.0,0.0,0.0,0.0,0.0,1.0],
+                           ])
+        self.T2 = spl.block_diag(self.dcos,[1.0],self.dcos,[1.0])
+        self.T = self.T0.dot(self.T1).dot(self.T2)
+    
+    def get_deformation(self):
+        ''' 获取节点变形及应变 '''
+        self.global_deformation = np.array([self.node[0].deformation,self.node[1].deformation]).flatten().T
+        self.local_deformation = self.T.dot(self.global_deformation)
+        # self.strain[0] = self.local_deformation[0]/self.length
+        # self.strain[1] = self.local_deformation[1]*-4./self.length + self.local_deformation[2]*-2./self.length
+        # self.strain[2] = self.local_deformation[1]*2./self.length + self.local_deformation[2]*4./self.length
+
+        oL2 = 1./self.length**2
+        self.epslnx = self.local_deformation[0]/self.length*np.ones(self.n_intps)
+        self.kappax = -oL2*((4.*self.length-6.*self.x)*self.local_deformation[1]+(2.*self.length-6.*self.x)*self.local_deformation[2])
+
+    def get_force(self):
+        '''获取单元内力'''
+        self.local_force = np.zeros(3)
+        for i in xrange(self.n_intps):
+            sec = self.intps[i]
+            sec.set_strain([self.epslnx[i],self.kappax[i]])
+            sec.get_force_stiffness()
+            self.local_force[0]+=self.wf_intps[i]*sec.inner_force[0]
+            self.local_force[1]+=self.wf_intps[i]*(self.loc_intps[i]*6.0-4.0)*sec.inner_force[1]
+            self.local_force[2]+=self.wf_intps[i]*(self.loc_intps[i]*6.0-2.0)*sec.inner_force[1]
+        self.global_force = self.T.T.dot(self.local_force).flatten()
+
+    def update_stiffness(self):
+        self.get_stiffness()
+        self.get_stiffness_matrix()
+        self.assemble_stiffness_matrix()
+
+    def update_history_para(self):
+        '''非线性迭代收敛时将历史状态变量更新'''
+        for i in xrange(self.n_intps):
+            self.intps[i].update_history_para()
+
 class Spring2D(Truss2D):
     """docstring for Spring2D"""
     def __init__(self, *arg):

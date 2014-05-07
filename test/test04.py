@@ -18,7 +18,7 @@ def main():
     truss.add_sec(Section.Truss,1,truss.mat[1],100.)
 
     L = 1000.0
-    mass = [200.,200.,200.]
+    mass = [200.,200.,1e-9]
     
     truss.add_node(1,(0.0,0.,0.),mass)
     truss.add_node(2,(L  ,0.,0.),mass)
@@ -26,7 +26,7 @@ def main():
     truss.add_ele(Element.Truss2D,1,truss.sec[1],(truss.node[1],truss.node[2]))
     dt = 0.01
     t = np.linspace(dt,1.,int(1./dt))
-    F = -2.e4*1.2*np.sin(2.*np.pi*t)
+    F = -2.e4*1.2*np.sin(2.*np.pi/1.*t)
     truss.add_load(1,truss.node[2],[1],[F],t)
 
     truss.add_cons(1,truss.node[1],[1,2],[0.0,0.0])
@@ -34,7 +34,6 @@ def main():
 
     truss.build_model()
     # truss.apply_cons(0)
-
     # analyse = Analysis.Analysis_Eigen(truss)
     # analyse.execute(1)
     
